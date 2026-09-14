@@ -6,6 +6,7 @@ import {
   OPERATORS, INITIAL_REQUESTS, INITIAL_PROPOSALS, INITIAL_COLLECTIONS,
   INITIAL_DESTINATIONS, INITIAL_NOTIFICATIONS, INITIAL_CERTIFICATES, calcCo2e
 } from './data';
+import { supabase } from './supabase';
 
 interface Toast { message: string; type: 'success' | 'error' | 'info' }
 
@@ -120,20 +121,139 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setNotifications(prev => [{ ...n, id, read: false, createdAt: new Date().toLocaleDateString('pt-BR') }, ...prev]);
   }, []);
 
-  const createRequest = useCallback((data: Omit<WasteRequest, 'id' | 'number' | 'status' | 'proposalCount' | 'createdAt'>) => {
+  const createRequest = useCallback(async (
+  data: Omit<WasteRequest, 'id' | 'number' | 'status' | 'proposalCount' | 'createdAt'>
+) => {
+  try {
+    const {
+      data: { user },
+      error: userError,
+    } = await supabase.auth.getUser();
+
+    if (userError || !user) {
+      showToast('Sua sessão não está mais ativa. Faça login novamente.', 'error');
+      return;
+    }
+
+    const { data: company, error: companyError } = await supabase
+      .from('companies')
+      .select('id, city, state')
+      .eq('profile_id', user.id)
+      .maybeSingle();
+
+    if (companyError || !company) {
+      console.error(companyError);
+      showToast('Não encontramos a empresa vinculada a esta conta.', 'error');
+      return;
+    }
+
+    const wasteTypeMap: Record<string, string> = {
+      'Papel': 'Papel e papelão',
+      'Papelão': 'Papel e papelão',
+      'Plástico': 'Plásticos',
+      'Vidro': 'Vidro',
+      'Metal': 'Metais',
+      'Alumínio': 'Metais',
+
+      'Resíduos industriais': 'Resíduos industriais',
+      'Resíduos de processo': 'Resíduos industriais',
+      'Embalagens contaminadas': 'Resíduos contaminados',
+      'Sucata metálica': 'Metais',
+
+      'Resíduos contaminados': 'Resíduos contaminados',
+      'Materiais contaminados': 'Resíduos contaminados',
+      'Produtos químicos': 'Resíduos contaminados',
+      'Embalagens contaminadas (perigosas)': 'Resíduos contaminados',
+
+      'Luvas': 'EPIs',
+      'Máscaras': 'EPIs',
+      'Uniformes': 'EPIs',
+      'EPIs contaminados': 'EPIs',
+      'EPIs diversos': 'EPIs',
+
+      'Computadores': 'Resíduos eletrônicos',
+      'Cabos': 'Resíduos eletrônicos',
+      'Equipamentos eletrônicos': 'Resíduos eletrônicos',
+      'Componentes eletrônicos': 'Resíduos eletrônicos',
+
+      'Lâmpadas fluorescentes': 'Lâmpadas',
+      'Lâmpadas de LED': 'Lâmpadas',
+      'Madeira': 'Outros',
+      'Outros resíduos': 'Outros',
+    };
+
+    const dbWasteTypeName = wasteTypeMap[data.wasteType] || data.wasteType;
+
+    const { data: wasteType, error: wasteTypeError } = await supabase
+      .from('waste_types')
+      .select('id, name')
+      .eq('name', dbWasteTypeName)
+      .eq('active', true)
+      .maybeSingle();
+
+    if (wasteTypeError || !wasteType) {
+      console.error(wasteTypeError);
+      showToast(`Tipo de resíduo não encontrado: ${data.wasteType}`, 'error');
+      return;
+    }
+
+    const serviceRequired = [
+      data.needsTransport ? 'Transporte' : null,
+      `Tratamento: ${data.needsTreatment}`,
+      `Destinação: ${data.desiredDestination}`,
+    ]
+      .filter(Boolean)
+      .join(' | ');
+
+    const { data: inserted, error: insertError } = await supabase
+      .from('collection_requests')
+      .insert({
+        company_id: company.id,
+        waste_type_id: wasteType.id,
+        title: `Necessidade de ${data.wasteType}`,
+        description: [
+          data.notes || null,
+          `Condição: ${data.condition}`,
+        ]
+          .filter(Boolean)
+          .join('\n'),
+        quantity: data.quantity,
+        unit: data.unit,
+        pickup_address: data.location,
+        pickup_city: company.city || null,
+        pickup_state: company.state || null,
+        preferred_date: data.desiredDate || null,
+        service_required: serviceRequired,
+      })
+      .select('*')
+      .single();
+
+    if (insertError || !inserted) {
+      console.error(insertError);
+      showToast('Não foi possível publicar a necessidade.', 'error');
+      return;
+    }
+
     const num = String(reqCounter++).padStart(3, '0');
+
     const req: WasteRequest = {
       ...data,
-      id: `req${num}`,
+      id: inserted.id,
       number: num,
       status: 'receiving_proposals',
       proposalCount: 0,
-      createdAt: new Date().toLocaleDateString('pt-BR'),
+      createdAt: new Date(inserted.created_at).toLocaleDateString('pt-BR'),
     };
+
     setRequests(prev => [req, ...prev]);
+
     showToast('Necessidade publicada com sucesso.');
     navigate('company-requests');
-  }, [navigate, showToast]);
+  } catch (error) {
+    console.error(error);
+    showToast('Ocorreu um erro ao publicar a necessidade.', 'error');
+  }
+}, [navigate, showToast]);
 
   const submitProposal = useCallback((data: Omit<Proposal, 'id' | 'status'>) => {
     const existing = proposals.find(p => p.requestId === data.requestId && p.operatorId === data.operatorId);
