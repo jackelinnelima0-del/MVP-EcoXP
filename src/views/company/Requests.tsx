@@ -44,7 +44,11 @@ function ProposalCard({ proposal, requestId, canSelect }: { proposal: any; reque
   const { compareIds, toggleCompare, selectOperator, navigate } = useApp();
   const [confirmOpen, setConfirmOpen] = useState(false);
   const op = OPERATORS.find(o => o.id === proposal.operatorId);
-  if (!op) return null;
+
+const operatorName = proposal.operatorName || op?.name || 'Operador de Resíduos';
+const operatorType = proposal.operatorType || op?.type || 'Operador';
+const operatorRating = op?.rating ?? 0;
+const operatorDistance = op?.distance ?? 0;
 
   const isInCompare = compareIds.includes(proposal.id);
 
@@ -57,11 +61,11 @@ function ProposalCard({ proposal, requestId, canSelect }: { proposal: any; reque
       <div className="flex items-start justify-between gap-2 mb-3">
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
-            <span className="font-display font-700 text-gray-900">{op.name}</span>
+            <span className="font-display font-700 text-gray-900">{operatorName}</span>
             {proposal.status === 'accepted' && <Badge color="green">✓ Selecionado</Badge>}
             {proposal.status === 'not_selected' && <Badge color="gray">Não selecionado</Badge>}
           </div>
-          <span className="text-xs text-gray-500">{op.type}</span>
+          <span className="text-xs text-gray-500">{operatorType}</span>
         </div>
         <div className="text-right shrink-0">
           <p className="font-display font-800 text-xl text-gray-900">R$ {proposal.value.toLocaleString('pt-BR')}</p>
@@ -71,11 +75,13 @@ function ProposalCard({ proposal, requestId, canSelect }: { proposal: any; reque
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs mb-3">
         <div className="bg-gray-50 rounded-lg px-2.5 py-1.5">
           <p className="text-gray-400">Avaliação</p>
-          <p className="font-semibold text-gray-700">★ {op.rating}</p>
+          <p className="font-semibold text-gray-700">★ {operatorRating || '—'}</p>
         </div>
         <div className="bg-gray-50 rounded-lg px-2.5 py-1.5">
           <p className="text-gray-400">Distância</p>
-          <p className="font-semibold text-gray-700">{op.distance} km</p>
+          <p className="font-semibold text-gray-700">
+  {operatorDistance ? `${operatorDistance} km` : '—'}
+</p>
         </div>
         <div className="bg-gray-50 rounded-lg px-2.5 py-1.5">
           <p className="text-gray-400">Disponível</p>
@@ -111,7 +117,7 @@ function ProposalCard({ proposal, requestId, canSelect }: { proposal: any; reque
         <div className="p-6">
           <p className="text-gray-600 text-sm mb-4">Você está selecionando:</p>
           <div className="bg-gray-50 rounded-xl p-4 mb-5 space-y-2 text-sm">
-            <p><span className="text-gray-400">Operador:</span> <strong className="text-gray-900">{op.name}</strong></p>
+            <p><span className="text-gray-400">Operador:</span> <strong className="text-gray-900">{operatorName}</strong></p>
             <p><span className="text-gray-400">Serviços:</span> {proposal.services.join(', ')}</p>
             <p><span className="text-gray-400">Valor:</span> <strong className="text-green-700">R$ {proposal.value.toLocaleString('pt-BR')}</strong></p>
             <p><span className="text-gray-400">Data:</span> {proposal.availableDate} às {proposal.availableTime}</p>

@@ -55,6 +55,8 @@ export interface Proposal {
   services: string[];
   notes: string;
   status: ProposalStatus;
+  operatorName?: string;
+  operatorType?: string;
 }
 
 export interface Collection {

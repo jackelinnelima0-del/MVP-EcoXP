@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useCallback, useRef } from 'react';
+import React, { createContext, useContext, useState, useCallback, useRef, useEffect } from 'react';
 import type {
   UserRole, WasteRequest, Proposal, Collection, Destination, Certificate, Notification, ImpactData
 } from './types';
@@ -76,6 +76,151 @@ let destCounter = 10;
 let certCounter = 10;
 
 export function AppProvider({ children }: { children: React.ReactNode }) {
+  useEffect(() => {
+    const loadRequests = async () => {
+      const { data: rows, error } = await supabase
+        .from('collection_requests')
+        .select(`
+          id,
+          company_id,
+          waste_type_id,
+          title,
+          description,
+          quantity,
+          unit,
+          pickup_address,
+          preferred_date,
+          service_required,
+          status,
+          created_at,
+          waste_types (
+            name,
+            category
+          ),
+          companies (
+            company_name
+          )
+        `)
+        .order('created_at', { ascending: false });
+
+      if (error) {
+        console.error('Erro ao carregar solicitações:', error);
+        return;
+      }
+
+      const loadedRequests: WasteRequest[] = (rows ?? []).map((row: any, index: number) => {
+        const wasteTypeName =
+          row.waste_types?.name ||
+          row.title?.replace('Necessidade de ', '') ||
+          'Resíduo';
+
+        const wasteCategory = row.waste_types?.category || '';
+        const description = row.description || '';
+        const conditionMatch = description.match(/Condição:\s*(.+)/i);
+        const service = row.service_required || '';
+
+        return {
+          id: row.id,
+          number: String(index + 1).padStart(3, '0'),
+          wasteType: wasteTypeName,
+          wasteCategory,
+          quantity: Number(row.quantity || 0),
+          unit: row.unit || 'kg',
+          condition: conditionMatch?.[1] || 'Não informado',
+          location: row.pickup_address || '',
+          desiredDate: row.preferred_date || '',
+          needsTransport: service.includes('Transporte'),
+          needsTreatment:
+            service.match(/Tratamento:\s*([^|]+)/i)?.[1]?.trim() || 'Não sei',
+          desiredDestination:
+            service.match(/Destinação:\s*([^|]+)/i)?.[1]?.trim() || '',
+          notes: description.replace(/Condição:\s*.+/i, '').trim(),
+          status:
+            row.status === 'open'
+              ? 'receiving_proposals'
+              : row.status,
+          proposalCount: 0,
+          createdAt: new Date(row.created_at).toLocaleDateString('pt-BR'),
+        };
+      });
+
+      setRequests(loadedRequests);
+    };
+
+    loadRequests();
+  }, []);
+  useEffect(() => {
+    const loadProposals = async () => {
+      const { data: rows, error } = await supabase
+        .from('proposals')
+        .select(`
+  id,
+  request_id,
+  operator_id,
+  price,
+  estimated_pickup_date,
+  service_description,
+  notes,
+  status,
+  created_at,
+  waste_operators (
+    company_name,
+    operator_type
+  )
+`)
+        .order('created_at', { ascending: false });
+
+      if (error) {
+        console.error('Erro ao carregar propostas:', error);
+        return;
+      }
+
+      const loadedProposals: Proposal[] = (rows ?? []).map((row: any) => {
+        const servicesText = row.service_description || '';
+
+        const servicesMatch = servicesText.match(/Serviços:\s*([^|]+)/i);
+        const timeMatch = servicesText.match(/Horário disponível:\s*([^|]+)/i);
+
+        const rawDate = row.estimated_pickup_date || '';
+
+        return {
+          id: row.id,
+          requestId: row.request_id,
+          operatorId: row.operator_id,
+          value: Number(row.price || 0),
+          availableDate: rawDate
+            ? new Date(`${rawDate}T00:00:00`).toLocaleDateString('pt-BR')
+            : '',
+          availableTime: timeMatch?.[1]?.trim() || '08:00',
+          services: servicesMatch
+            ? servicesMatch[1].split(',').map((s: string) => s.trim())
+            : [],
+          notes: row.notes || '',
+          status:
+            row.status === 'submitted'
+              ? 'sent'
+              : row.status === 'accepted'
+                ? 'accepted'
+                : 'not_selected',
+operatorName: row.waste_operators?.company_name || 'Operador de Resíduos',
+operatorType: row.waste_operators?.operator_type || '',
+        };
+      });
+
+      setProposals(loadedProposals);
+
+      setRequests(prev =>
+        prev.map(request => ({
+          ...request,
+          proposalCount: loadedProposals.filter(
+            proposal => proposal.requestId === request.id
+          ).length,
+        }))
+      );
+    };
+
+    loadProposals();
+  }, []);
   const [role, setRoleState] = useState<UserRole | null>(null);
   const [loggedIn, setLoggedIn] = useState(false);
   const [view, setView] = useState('landing');
@@ -255,35 +400,212 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }
 }, [navigate, showToast]);
 
-  const submitProposal = useCallback((data: Omit<Proposal, 'id' | 'status'>) => {
-    const existing = proposals.find(p => p.requestId === data.requestId && p.operatorId === data.operatorId);
-    if (existing) { showToast('Você já enviou uma proposta para este chamado.', 'info'); return; }
-    const prop: Proposal = { ...data, id: `prop${++propCounter}`, status: 'sent' };
-    setProposals(prev => [...prev, prop]);
-    setRequests(prev => prev.map(r => r.id === data.requestId ? { ...r, proposalCount: r.proposalCount + 1 } : r));
-    addNotification({ message: 'Nova proposta recebida', detail: `EcoTrat Resíduos enviou uma proposta para o Chamado #${proposals.find(p=>p.requestId===data.requestId)?.requestId || data.requestId}.`, type: 'proposal', requestId: data.requestId });
-    showToast('Proposta enviada com sucesso.');
-  }, [proposals, addNotification, showToast]);
+  const submitProposal = useCallback(async (
+  data: Omit<Proposal, 'id' | 'status'>
+) => {
+  try {
+    const {
+      data: { user },
+      error: userError,
+    } = await supabase.auth.getUser();
 
-  const selectOperator = useCallback((requestId: string, operatorId: string, proposalId: string) => {
-    setRequests(prev => prev.map(r =>
-      r.id === requestId ? { ...r, status: 'collection_scheduled', selectedOperatorId: operatorId } : r
-    ));
-    setProposals(prev => prev.map(p =>
-      p.requestId === requestId ? { ...p, status: p.id === proposalId ? 'accepted' : 'not_selected' } : p
-    ));
+    if (userError || !user) {
+      showToast('Sua sessão não está mais ativa. Faça login novamente.', 'error');
+      return;
+    }
+
+    const { data: operator, error: operatorError } = await supabase
+      .from('waste_operators')
+      .select('id')
+      .eq('profile_id', user.id)
+      .eq('active', true)
+      .maybeSingle();
+
+    if (operatorError || !operator) {
+      console.error(operatorError);
+      showToast('Operador não encontrado para esta conta.', 'error');
+      return;
+    }
+
+    const existing = await supabase
+      .from('proposals')
+      .select('id')
+      .eq('request_id', data.requestId)
+      .eq('operator_id', operator.id)
+      .maybeSingle();
+
+    if (existing.data) {
+      showToast('Você já enviou uma proposta para este chamado.', 'info');
+      return;
+    }
+
+    const pickupDate = data.availableDate.includes('/')
+      ? data.availableDate.split('/').reverse().join('-')
+      : data.availableDate;
+
+    const serviceDescription = [
+      `Serviços: ${data.services.join(', ')}`,
+      `Horário disponível: ${data.availableTime}`,
+    ].join(' | ');
+
+    const { data: inserted, error: insertError } = await supabase
+      .from('proposals')
+      .insert({
+        request_id: data.requestId,
+        operator_id: operator.id,
+        price: data.value,
+        estimated_pickup_date: pickupDate || null,
+        service_description: serviceDescription,
+        notes: data.notes || null,
+        status: 'submitted',
+      })
+      .select('*')
+      .single();
+
+    if (insertError || !inserted) {
+      console.error(insertError);
+      showToast('Não foi possível enviar a proposta.', 'error');
+      return;
+    }
+
+    const proposal: Proposal = {
+      id: inserted.id,
+      requestId: inserted.request_id,
+      operatorId: inserted.operator_id,
+      value: Number(inserted.price || 0),
+      availableDate: data.availableDate,
+      availableTime: data.availableTime,
+      services: data.services,
+      notes: inserted.notes || '',
+      status: 'sent',
+    };
+
+    setProposals(prev => [...prev, proposal]);
+
+    setRequests(prev =>
+      prev.map(r =>
+        r.id === data.requestId
+          ? { ...r, proposalCount: r.proposalCount + 1 }
+          : r
+      )
+    );
+
+    showToast('Proposta enviada com sucesso.');
+  } catch (error) {
+    console.error(error);
+    showToast('Ocorreu um erro ao enviar a proposta.', 'error');
+  }
+}, [showToast]);
+  const selectOperator = useCallback(async (
+  requestId: string,
+  operatorId: string,
+  proposalId: string
+) => {
+  try {
+    const { data: updatedProposal, error: proposalError } = await supabase
+      .from('proposals')
+      .update({ status: 'accepted' })
+      .eq('id', proposalId)
+      .select('*')
+      .single();
+
+    if (proposalError || !updatedProposal) {
+      console.error(proposalError);
+      showToast('Não foi possível aceitar a proposta.', 'error');
+      return;
+    }
+
+    const { error: otherProposalsError } = await supabase
+      .from('proposals')
+      .update({ status: 'not_selected' })
+      .eq('request_id', requestId)
+      .neq('id', proposalId);
+
+    if (otherProposalsError) {
+      console.error(otherProposalsError);
+      showToast('A proposta foi aceita, mas não foi possível atualizar as demais.', 'error');
+      return;
+    }
+
+    const { error: requestError } = await supabase
+      .from('collection_requests')
+      .update({ status: 'operator_selected' })
+      .eq('id', requestId);
+
+    if (requestError) {
+      console.error(requestError);
+      showToast('A proposta foi aceita, mas não foi possível atualizar o chamado.', 'error');
+      return;
+    }
+
     const req = requests.find(r => r.id === requestId);
-    const col: Collection = {
-      id: `col${++colCounter}`,
-      requestId,
-      operatorId,
-      scheduledDate: req?.desiredDate || '',
+
+    const { data: collection, error: collectionError } = await supabase
+      .from('collections')
+      .insert({
+        request_id: requestId,
+        proposal_id: proposalId,
+        operator_id: operatorId,
+        scheduled_date: req?.desiredDate || null,
+        status: 'scheduled',
+      })
+      .select('*')
+      .single();
+
+    if (collectionError || !collection) {
+      console.error(collectionError);
+      showToast('A proposta foi aceita, mas não foi possível criar a coleta.', 'error');
+      return;
+    }
+
+    setRequests(prev =>
+      prev.map(r =>
+        r.id === requestId
+          ? {
+              ...r,
+              status: 'collection_scheduled',
+              selectedOperatorId: operatorId,
+            }
+          : r
+      )
+    );
+
+    setProposals(prev =>
+      prev.map(p =>
+        p.requestId === requestId
+          ? {
+              ...p,
+              status: p.id === proposalId ? 'accepted' : 'not_selected',
+            }
+          : p
+      )
+    );
+
+    const localCollection: Collection = {
+      id: collection.id,
+      requestId: collection.request_id,
+      operatorId: collection.operator_id,
+      scheduledDate: collection.scheduled_date || '',
       status: 'scheduled',
     };
-    setCollections(prev => [...prev, col]);
-    addNotification({ message: 'Operador selecionado', detail: `Operador selecionado para o Chamado #${requests.find(r=>r.id===requestId)?.number || requestId}. Coleta agendada.`, type: 'selection', requestId });
+
+    setCollections(prev => [...prev, localCollection]);
+
+    addNotification({
+      message: 'Operador selecionado',
+      detail: `Operador selecionado para o Chamado #${
+        req?.number || requestId
+      }. Coleta agendada.`,
+      type: 'selection',
+      requestId,
+    });
+
     showToast('Operador selecionado com sucesso.');
-  }, [requests, addNotification, showToast]);
+  } catch (error) {
+    console.error(error);
+    showToast('Ocorreu um erro ao selecionar o operador.', 'error');
+  }
+}, [requests, addNotification, showToast]);
 
   const updateCollectionStatus = useCallback((collectionId: string, status: Collection['status']) => {
     setCollections(prev => prev.map(c => c.id === collectionId ? { ...c, status } : c));
