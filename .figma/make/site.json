@@ -1,0 +1,10 @@
+{
+  "description": "Connects waste-generating companies with specialized waste operators for efficient management, collection, and environmentally responsible disposal.",
+  "robots": {
+    "index": false
+  },
+  "accessibility": {
+    "addBypassLinks": false,
+    "ignoreReducedMotion": false
+  }
+}
