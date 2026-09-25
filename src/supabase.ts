@@ -8,5 +8,3 @@ if (!supabaseUrl || !supabaseAnonKey) {
 }
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey);
-console.log('URL do Supabase:', supabaseUrl);
-console.log('Chave do Supabase:', supabaseAnonKey);
